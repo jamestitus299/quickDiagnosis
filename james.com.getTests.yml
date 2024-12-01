@@ -1,0 +1,131 @@
+id: getTests
+namespace: james.com
+description: get patient data from a form, get the recommended test for diagnosis, puts data into firebase, send mail to patient to schedule appointment after getting test done
+
+inputs:
+  - id: name
+    type: STRING
+    defaults: Dummy name
+  - id: email
+    type: STRING
+    defaults: dummy@gmail.com
+  - id: contact
+    type: STRING
+    defaults: 9878767898
+  - id: gender
+    type: STRING
+    defaults: Male
+  - id: age
+    type: STRING
+    defaults: 21
+  - id: problem
+    type: STRING
+    defaults: feeling dizzinesss have not taken my sugar medicines
+  - id: days
+    type: STRING
+    defaults: 2
+  - id : link
+    type : STRING
+    defaults : https://zdchackathon0941-zohotest67.zohobookings.com/#/4770957000000042016
+
+
+tasks:
+  - id: hello
+    type: io.kestra.plugin.core.log.Log
+    message: Diagnose request by, {{ inputs.name }}
+
+  - id: GetTestsFromMLModel
+    type: io.kestra.plugin.scripts.python.Script
+    script: |
+      import requests
+      import google.generativeai as genai
+      from kestra import Kestra
+
+      YOUR_API_KEY="API_KEY"
+      genai.configure(api_key=YOUR_API_KEY)
+      model = genai.GenerativeModel("gemini-1.5-flash")
+
+      question = f"I have the following problems {{inputs.problem}}, my age id {{inputs.days}} give me the necessary test needed for a good diagnosis, give only the tests required as string separated by commas"
+      response = model.generate_content(question)
+      tests = response.text.split(",")
+      tests[-1] = tests[-1].rstrip("\n")
+      output_tests = ",".join(tests)
+
+      my_kv_pair = {'tests': output_tests}
+      Kestra.outputs(my_kv_pair)
+
+    beforeCommands:
+      - pip install -q -U google-generativeai kestra
+  
+
+  - id: putDataIntoFirebase
+    type: io.kestra.plugin.scripts.python.Script
+    script: |
+      import firebase_admin
+      from firebase_admin import credentials, firestore
+
+      firebase_config = {
+        ....
+      }
+
+      cert = {
+        ......
+      }
+
+      payload = {
+          "name": "{{ inputs.name }}",
+          "email": "{{ inputs.email }}",
+          "contact": "{{ inputs.contact }}",
+          "gender": "{{ inputs.gender }}",
+          "age": "{{ inputs.age }}",
+          "problem": "{{ inputs.problem }}",
+          "days": "{{ inputs.days }}",
+          "recommended_tests": "{{ outputs.GetTestsFromMLModel.vars.tests }}",
+          "approval" : 0
+      }
+
+      # print(payload)
+
+      cred = credentials.Certificate(cert)
+      firebase_admin.initialize_app(cred)
+
+      db = firestore.client()
+      patientDoc = db.collection('patientDiagnose')
+      patientRef = patientDoc.add(payload)
+
+    beforeCommands:
+      - pip install -q -U firebase-admin
+
+  - id: sendGmail
+    type: io.kestra.plugin.scripts.python.Script
+    script: |
+      import smtplib
+      from email.mime.text import MIMEText
+
+      subject = "Book Your Appointment"
+      body = (
+        "Hello {{inputs.name}},\n\n"
+        "Based on your problem and symptoms, the following tests are recommended. \n\n"
+        "Test required : {{ outputs.GetTestsFromMLModel.vars.tests }} \n\n"
+        "You can get your tests done on your own time and book your appointment using the link provided below. \n\n"
+        "{{ inputs.link }}"
+      )
+      sender = "titusjames299@gmail.com"
+      recipients = "{{ inputs.email }}"
+      password = "<password>"
+
+      def send_email(subject, body, sender, recipients, password):
+          msg = MIMEText(body)
+          msg['Subject'] = subject
+          msg['From'] = sender
+          msg['To'] = recipients
+        
+          with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp_server:
+              smtp_server.login(sender, password)
+              smtp_server.sendmail(sender, recipients, msg.as_string())
+          print("Message sent!")
+
+      send_email(subject, body, sender, recipients, password)
+
+
+  
